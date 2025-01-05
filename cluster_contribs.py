@@ -1,3 +1,5 @@
+# https://claude.ai/chat/8a8b1098-33e2-4d71-a4b4-157b7140cf5d
+
 import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv

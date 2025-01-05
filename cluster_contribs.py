@@ -93,7 +93,9 @@ class FECContributionAnalyzer:
         start_date: str,
         end_date: str,
         time_window_days: int,
-        min_contributors: int = 2
+        min_contributors: int = 2,
+        excluded_committees: Set[str] = None,
+        excluded_committee_types: Set[str] = None
     ) -> List[ContributionCluster]:
         """
         Find clusters of contributions from the specified contributors within a time window
@@ -104,10 +106,15 @@ class FECContributionAnalyzer:
             end_date: End date in MM/DD/YYYY format
             time_window_days: Maximum days between contributions to be considered a cluster
             min_contributors: Minimum number of contributors required for a cluster
+            excluded_committees: Set of committee IDs to exclude from analysis
+            excluded_committee_types: Set of committee types to exclude (e.g., {'P' for presidential, 'H' for house})
             
         Returns:
             List of ContributionCluster objects
         """
+        excluded_committees = excluded_committees or set()
+        excluded_committee_types = excluded_committee_types or set()
+
         # Collect all contributions for all contributors
         all_contributions = []
         for contributor in contributors:
@@ -127,6 +134,10 @@ class FECContributionAnalyzer:
             lambda x: f"{x['contributor_name']}_{x['contribution_receipt_date']}_{x['contribution_receipt_amount']}", 
             axis=1
         )
+
+        # Filter out excluded committees and committee types
+        df = df[~df['committee_id'].isin(excluded_committees)]
+        df = df[~df.apply(lambda x: x['committee']['committee_type'] in excluded_committee_types, axis=1)]
 
         # Group by committee
         clusters = []
@@ -239,19 +250,29 @@ def main():
         # Add more contributors as needed
     ]
     
+    # Define committees and committee types to exclude
+    excluded_committees = {
+        'C00428623',  # GOOGLE LLC NETPAC
+    }
+    
+    excluded_committee_types = {}
+    
     # Find contribution clusters
     clusters = analyzer.find_contribution_clusters(
         contributors=contributors,
-        start_date="01/01/2020",
+        start_date="01/01/2015",
         end_date="12/31/2024",
         time_window_days=30,
-        min_contributors=2
+        min_contributors=3,  # Increased minimum number of contributors
+        excluded_committees=excluded_committees,
+        excluded_committee_types=excluded_committee_types
     )
     
     # Print results
     for i, cluster in enumerate(clusters, 1):
         print(f"\nCluster {i}:")
-        print(f"Committee: {cluster.committee_name}")
+        print(f"Committee: {cluster.committee_name} (ID: {cluster.committee_id})")
+        print(f"Committee Type: {cluster.contributions[0]['committee']['committee_type']}")
         print(f"Date Range: {cluster.start_date.date()} to {cluster.end_date.date()}")
         print(f"Total Amount: ${cluster.total_amount:,.2f}")
         print(f"Number of Contributors: {len(cluster.contributors)}")

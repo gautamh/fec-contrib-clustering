@@ -37,7 +37,8 @@ class FECContributionAnalyzer:
             'sort_hide_null': False,
             'sort_nulls_last': False,
             'sort': '-contribution_receipt_date',
-            'is_individual': True
+            'is_individual': True,
+            'per_page': 100,
         }
 
     def get_contributor_data(self, contributor: Contributor, start_date: str, end_date: str) -> List[Dict]:
@@ -66,6 +67,7 @@ class FECContributionAnalyzer:
         while True:
             params['page'] = page
             response = requests.get(BASE_URL, params=params)
+            print(response.url)
             if response.status_code != 200:
                 raise Exception(f"API request failed: {response.status_code}")
             
@@ -117,6 +119,12 @@ class FECContributionAnalyzer:
 
         # Convert date strings to datetime objects
         df['contribution_receipt_date'] = pd.to_datetime(df['contribution_receipt_date'])
+        
+        # Create a unique identifier for each contribution
+        df['contribution_id'] = df.apply(
+            lambda x: f"{x['contributor_name']}_{x['contribution_receipt_date']}_{x['contribution_receipt_amount']}", 
+            axis=1
+        )
 
         # Group by committee
         clusters = []
@@ -126,23 +134,43 @@ class FECContributionAnalyzer:
             # Sort contributions by date
             committee_group = committee_group.sort_values('contribution_receipt_date')
             
-            # Find clusters within the time window
-            current_cluster = []
-            for _, row in committee_group.iterrows():
-                if not current_cluster or (
-                    row['contribution_receipt_date'] - 
-                    pd.to_datetime(current_cluster[-1]['contribution_receipt_date'])
-                ).days <= time_window_days:
-                    current_cluster.append(row.to_dict())
-                else:
-                    # Process the completed cluster if it meets criteria
-                    if len(set(c['contributor_name'] for c in current_cluster)) >= min_contributors:
-                        clusters.append(self._create_cluster(current_cluster, committee_id, committee_name))
-                    current_cluster = [row.to_dict()]
+            # Initialize variables for cluster detection
+            current_cluster_contributions = []
+            current_cluster_ids = set()  # Track unique contribution IDs
+            current_cluster_contributors = set()  # Track unique contributors
             
-            # Process the last cluster
-            if len(current_cluster) >= min_contributors:
-                clusters.append(self._create_cluster(current_cluster, committee_id, committee_name))
+            for idx, row in committee_group.iterrows():
+                current_date = row['contribution_receipt_date']
+                
+                # Check if this contribution should start a new cluster
+                if current_cluster_contributions:
+                    time_diff = (current_date - current_cluster_contributions[-1]['contribution_receipt_date']).days
+                    if time_diff > time_window_days:
+                        # Process the completed cluster if it meets criteria
+                        if len(current_cluster_contributors) >= min_contributors:
+                            clusters.append(self._create_cluster(
+                                current_cluster_contributions, 
+                                committee_id, 
+                                committee_name
+                            ))
+                        # Start a new cluster
+                        current_cluster_contributions = []
+                        current_cluster_ids = set()
+                        current_cluster_contributors = set()
+                
+                # Add contribution to current cluster if it's not already included
+                if row['contribution_id'] not in current_cluster_ids:
+                    current_cluster_contributions.append(row.to_dict())
+                    current_cluster_ids.add(row['contribution_id'])
+                    current_cluster_contributors.add(row['contributor_name'])
+            
+            # Process the last cluster if it meets criteria
+            if len(current_cluster_contributors) >= min_contributors:
+                clusters.append(self._create_cluster(
+                    current_cluster_contributions,
+                    committee_id,
+                    committee_name
+                ))
 
         return clusters
 
@@ -224,11 +252,15 @@ def main():
         print(f"Committee: {cluster.committee_name}")
         print(f"Date Range: {cluster.start_date.date()} to {cluster.end_date.date()}")
         print(f"Total Amount: ${cluster.total_amount:,.2f}")
+        print(f"Number of Contributors: {len(cluster.contributors)}")
         print("Contributors:")
-        for contributor in cluster.contributors:
+        for contributor in sorted(cluster.contributors):
             print(f"- {contributor}")
         print("Individual Contributions:")
-        for contrib in cluster.contributions:
+        # Sort contributions by date for clearer output
+        sorted_contributions = sorted(cluster.contributions, 
+                                   key=lambda x: pd.to_datetime(x['contribution_receipt_date']))
+        for contrib in sorted_contributions:
             print(f"- {contrib['contributor_name']}: ${contrib['contribution_receipt_amount']:,.2f} "
                   f"on {contrib['contribution_receipt_date']}")
 
